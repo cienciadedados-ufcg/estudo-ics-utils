@@ -1,0 +1,156 @@
+---
+title: "Binge drinking"
+output: html_notebook
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(hrbrthemes)
+theme_set(theme_ipsum_rc())
+
+library(boot)
+library(broom)
+```
+
+```{r}
+binge = read_csv(here::here("data/young-people-drinking.csv"), 
+                 col_types = "cdddddd")
+
+binge = binge %>% 
+    mutate(sexo = if_else(sexo == "1", "M", "F"))
+
+glimpse(binge)
+```
+
+
+```{r}
+s <- function(d, i) {
+    sumarizado = d[i,] %>% 
+        summarise(do_grupo = sum(sexo == "M") / n())
+    
+    sumarizado %>% 
+      pull(do_grupo)
+}
+
+booted <- boot(data = filter(binge, mo_binge_n > 0), 
+               statistic = s, 
+               R = 2000)
+
+estimado = tidy(booted, 
+                conf.level = .95,
+                conf.method = "basic",
+                conf.int = TRUE)
+
+glimpse(estimado)
+```
+
+
+```{r}
+abusaram = nrow(filter(binge, mo_binge_n > 0))
+
+estimado %>% 
+    ggplot(aes(
+        ymin = conf.low,
+        y = statistic,
+        ymax = conf.high,
+        x = "Homens"
+    )) +
+    geom_linerange() +
+    geom_point(color = "steelblue", size = 2) +
+    geom_text(
+        aes(
+            y = conf.high,
+            label = str_glue("[{round(conf.low, 2)}, {round(conf.high, 2)}]")
+        ),
+        size = 3,
+        nudge_x = -.05,
+        show.legend = F
+    )  +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(
+        title = "Proporção de homens entre participantes que abusaram de álcool",
+        subtitle = str_glue("Estimado a partir de uma amostra de N={abusaram}"),
+        x = "", y = "Proporção entre jovens que abusaram de álcool") +
+    coord_flip()
+```
+
+
+```{r}
+s <- function(d, i) {
+    a = d[i,] %>% 
+        filter(mo_binge_n == 0) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    b = d[i,] %>% 
+        filter(mo_binge_n > 0) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    a - b
+}
+
+booted <- boot(data = binge, 
+               statistic = s, 
+               R = 2000)
+
+estimado = tidy(booted, 
+                conf.level = .95,
+                conf.method = "bca",
+                conf.int = TRUE)
+
+glimpse(estimado)
+```
+
+```{r}
+binge %>% 
+    mutate(abusaram = if_else(mo_binge_n > 0, "Abusaram", "Não abusaram")) %>% 
+    ggplot(aes(x = k_unit_sum, y = after_stat(density))) + 
+    facet_wrap(~ abusaram) + 
+    geom_histogram(fill = "steelblue", binwidth = 1, color = "black", alpha = .5) + 
+    labs(
+        y = "Porporção de participantes", 
+        x = "Conhecimento sobre quantidades indicadas (0 a 6) "
+    )
+```
+
+```{r}
+binge %>% 
+    mutate(abusaram = if_else(mo_binge_n > 0, "Abusaram", "Não abusaram")) %>% 
+    group_by(abusaram) %>% 
+    summarise(media = mean(k_unit_sum), 
+              n = n())
+```
+
+
+```{r}
+n_abusaram = nrow(filter(binge, mo_binge_n == 0))
+
+estimado %>% 
+    ggplot(aes(
+        ymin = conf.low,
+        y = statistic,
+        ymax = conf.high,
+        x = "Não abusaram - Abusaram"
+    )) +
+    geom_linerange() +
+    geom_point(color = "steelblue", size = 3) +
+    geom_text(
+        aes(
+            y = conf.high,
+            label = str_glue("[{round(conf.low, 2)}, {round(conf.high, 2)}]")
+        ),
+        size = 3,
+        nudge_x = -.05,
+        show.legend = F
+    )  +
+    scale_y_continuous(limits = c(-3, 3)) +
+    labs(
+        title = "Diferença no conhecimento sobre quantidades indicadas",
+        subtitle = str_glue("Na amostra de N={abusaram} que abusaram e N={n_abusaram} que não"),
+        x = "", y = "Diferença no Conhecimento") +
+    coord_flip()
+```
+
+
