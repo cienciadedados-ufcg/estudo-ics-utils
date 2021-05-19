@@ -1,0 +1,322 @@
+---
+title: "Testes de Hipótese e Binge drinking"
+output: html_notebook
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(hrbrthemes)
+theme_set(theme_ipsum_rc())
+
+library(boot)
+library(broom)
+```
+
+Dados de de *Visser, R. O., Birch, J. D. (2012). My cup runneth over:Young people's lack of knowledge of low-risk drinking guidelines. Drug and Alcohol Review, 31, 206-212.*, disponíveis no [OnlineStatBook project](https://onlinestatbook.com/2/case_studies/binge.html).
+
+
+```{r}
+binge = read_csv(here::here("data/young-people-drinking.csv"), 
+                 col_types = "cdddddd")
+
+binge = binge %>% 
+    mutate(sexo = if_else(sexo == "1", "M", "F"), 
+           abusou = mo_binge_n >= 1)
+
+glimpse(binge)
+```
+
+Vamos nos concentrar nos número de vezes quye  participantes que abusaram de bebida no último mês: 
+
+```{r}
+binge %>% count(abusou)
+
+binge %>% 
+  group_by(sexo) %>% 
+  summarise(prop_abusou = sum(abusou)/ n(), .groups = "drop")
+```
+
+Uma pergunta usando inferência é: a partir de nossa amostra nós podemos inferir com confiança que a maioria das pessoas que abusou de álcool na população eram homens? Na nossa amostra, a maioria é de mulheres:
+
+```{r}
+binge %>% 
+  group_by(sexo) %>% 
+  summarise(prop_abusou = sum(abusou) / n(), .groups = "drop")
+```
+A proporção de homens na amostra é 0.396. 
+
+## Usando intervalos de confiança
+
+Usando ICs para inferir a proporção de homens na população:
+
+```{r}
+set.seed(123)
+
+s <- function(d, i) {
+    m = d[i,] %>% 
+      filter(sexo == "M") %>% 
+      summarise(prop_abusou = sum(abusou) / n(), .groups = "drop") %>% 
+      pull(prop_abusou)
+    
+    f = d[i, ] %>% 
+      filter(sexo == "F") %>% 
+      summarise(prop_abusou = sum(abusou) / n(), .groups = "drop") %>% 
+      pull(prop_abusou)
+
+    f - m
+}
+
+theta_chapeu = s(binge, 1:NROW(binge))
+
+theta_chapeu
+```
+
+```{r}
+booted <- boot(data = binge, 
+               statistic = s, 
+               R = 2000)
+
+estimado = tidy(booted, 
+                conf.level = .96,
+                conf.method = "bca",
+                conf.int = TRUE)
+
+glimpse(estimado)
+```
+
+
+Nossa conclusão é que com 90% de confiança, a diferença entre os grupos está entre 0.01 e 0.23. Ou seja, com 90% de confiança, é plausível que as pessoas que abusaram de álcool estiveram bem mais vezes em situações com álcool que as demais.
+
+Uma outra forma de falar isso que é mais limitada mas vai nos ajudar a entender testes de hipótese: se admitirmos *uma chance de erro no método de inferência* de 10%, ainda assim estamos confiantes de que proporção de pessoas que abusou de álcool entre mulheres é maior que entre homens. 
+
+Vamos chamar essa chance de erro tolerável de $\alpha$ e aqui estamos dizendo que considerando $\alpha = 0.10$ podemos afirmar que a proporção para mulheres é maior que para homens. Em testes de hipótese, diríamos que considerando esse $\alpha$ a diferença é significativa, ou estatisticamente significativa.
+
+P-valor
+
+A proporção é maior entre mulheres do que entre homens (M = 0.77, F = 0.9, p = 0.043).  
+
+
+
+## O p-valor a partir dos ICs
+
+Pensando por outro lado, podemos também achar qual é o menor $\alpha$ para o qual ainda podemos afirmar que o intervalo para o efeito que estamos estudando não inclui zero.  
+
+
+```{r}
+outro_alpha = tidy(booted, 
+                   conf.level = 1 - 0.0535,
+                   conf.method = "bca",
+                   conf.int = TRUE)
+
+outro_alpha
+```
+
+Ou seja, com um nível de 94.65% de confiança, é plausível que as proporções sejam iguais. Se estivéssemos usando testes de hipótese, encontraríamos que **o p-valor** para a diferença das proporçòes é $p=0.035$. Se considerarmos um nível de significância de $\alpha = .10$ esse p-valor indica uma diferença significativa. Se consideramos um $\alpha = .05$, não é. 
+
+Em alto nível, essa é a equivalência entre ICs e testes de hipótese. Agora podemos nos concentrar em como fazer testes.
+
+## O teste de hipótese
+
+Premissa: conseguimos facilmente gerar situações semelhantes às nossas onde com certeza os grupos não são diferentes. Essas situações nos dão uma referência para sabermos se a nossa se parece com situações onde com certeza não há diferença. 
+
+De novo: conseguimos gerar um modelo nulo que cria simula situações semelhantes à que estudamos, mas garantindo que não há efeito. Com essas simulações podemos jultar se nossa amostra parece com os do modelo nulo, 
+
+```{r}
+s_nulo <- function(d) {
+  n = NROW(d)
+  embaralhado = d %>% 
+    mutate(abusou = sample(abusou, n()))
+  
+  m = embaralhado %>% 
+    filter(sexo == "M") %>% 
+    summarise(prop_abusou = sum(abusou) / n(), .groups = "drop") %>% 
+    pull(prop_abusou)
+  
+  f = embaralhado %>% 
+    filter(sexo == "F") %>% 
+    summarise(prop_abusou = sum(abusou) / n(), .groups = "drop") %>% 
+    pull(prop_abusou)
+  
+  f - m
+}
+
+s_nulo(binge)
+```
+
+```{r}
+simulacoes = tibble(simulacao = 1:5000) %>% 
+  mutate(theta_nulo = map_dbl(simulacao, ~ s_nulo(binge)))
+
+simulacoes
+```
+
+```{r}
+simulacoes %>% 
+  ggplot(aes(x = theta_nulo)) + 
+  geom_histogram(binwidth = .05) + 
+  geom_vline(xintercept = c(-theta_chapeu, theta_chapeu))
+```
+
+```{r}
+p = simulacoes %>% 
+  summarise(p_valor = sum(abs(theta_nulo) >= abs(theta_chapeu))/n(), 
+            .groups = "drop")
+
+p
+```
+
+Se p-valor < 0.1 
+
+Ou seja, em XXX das simulações geradas por um modelo nulo, obervamos um efeito igual ou maior que o da nossa amostra. Esse é o único significado correto do p-valor.
+
+
+```{r}
+
+estimado %>% 
+    ggplot(aes(
+        ymin = conf.low,
+        y = statistic,
+        ymax = conf.high,
+        x = "Homens"
+    )) +
+    geom_linerange() +
+    geom_point(color = "steelblue", size = 2) +
+    geom_text(
+        aes(
+            y = conf.high,
+            label = str_glue("[{round(conf.low, 2)}, {round(conf.high, 2)}]")
+        ),
+        size = 3,
+        nudge_x = -.05,
+        show.legend = F
+    )  +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(
+        title = "Proporção de homens entre participantes que abusaram de álcool",
+        subtitle = str_glue("Estimado a partir de uma amostra de N={abusaram}"),
+        x = "", y = "Proporção entre jovens que abusaram de álcool") +
+    coord_flip()
+```
+
+
+## Mesma coisa para o quanto a pessoa sabe    
+
+
+```{r}
+binge %>% 
+    ggplot(aes(x = k_unit_sum, y = after_stat(density))) + 
+    facet_wrap(~ abusou) + 
+    geom_histogram(fill = "steelblue", binwidth = 1, color = "black", alpha = .5) + 
+    labs(
+        y = "Porporção de participantes", 
+        x = "Conhecimento sobre quantidades indicadas (0 a 6) "
+    )
+```
+
+
+```{r}
+binge %>% 
+    group_by(abusou) %>% 
+    summarise(media = mean(k_unit_sum), 
+              n = n())
+```
+
+
+```{r}
+s <- function(d, i) {
+    a = d[i,] %>% 
+        filter(abusou) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    b = d[i,] %>% 
+        filter(!abusou) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    a - b
+}
+
+booted <- boot(data = binge, 
+               statistic = s, 
+               R = 2000)
+
+estimado = tidy(booted, 
+                conf.level = .95,
+                conf.method = "bca",
+                conf.int = TRUE)
+
+glimpse(estimado)
+```
+
+
+
+```{r}
+estimado %>% 
+    ggplot(aes(
+        ymin = conf.low,
+        y = statistic,
+        ymax = conf.high,
+        x = "Não abusaram - Abusaram"
+    )) +
+    geom_linerange() +
+    geom_point(color = "steelblue", size = 3) +
+    geom_text(
+        aes(
+            y = conf.high,
+            label = str_glue("[{round(conf.low, 2)}, {round(conf.high, 2)}]")
+        ),
+        size = 3,
+        nudge_x = -.05,
+        show.legend = F
+    )  +
+    scale_y_continuous(limits = c(-3, 3)) +
+    labs(
+        title = "Diferença no conhecimento sobre quantidades indicadas",
+        x = "", y = "Diferença no Conhecimento") +
+    coord_flip()
+```
+
+```{r}
+s <- function(d) {
+    embaralhados = d %>% mutate(k_unit_sum = sample(k_unit_sum, size = n()))
+    
+    a = embaralhados %>% 
+        filter(abusou) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    b = embaralhados %>% 
+        filter(!abusou) %>% 
+        summarise(do_grupo = mean(k_unit_sum)) %>% 
+        pull(do_grupo)
+    
+    a - b
+}
+```
+
+```{r}
+simulacoes = tibble(simulacao = 1:5000) %>% 
+  mutate(theta_nulo = map_dbl(simulacao, ~ s(binge)))
+
+simulacoes
+```
+
+```{r}
+theta_chapeu = -0.1494538
+
+simulacoes %>% 
+  ggplot(aes(x = theta_nulo)) + 
+  geom_histogram(binwidth = .1) + 
+  geom_vline(xintercept = c(-theta_chapeu, theta_chapeu))
+```
+
+```{r}
+p = simulacoes %>% 
+  summarise(p_valor = sum(abs(theta_nulo) >= abs(theta_chapeu))/n(), 
+            .groups = "drop")
+
+p
+```
+
